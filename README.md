@@ -1,2 +1,5 @@
 # Optilens
-OptiLens is an autonomous AI-powered Conversion Rate Optimization (CRO) platform embedded natively inside Shopify Admin. It deploys 27 specialized AI agents to audit every layer of a Shopify store — copy, UX, visuals, speed, trust, SEO, checkout, forms, navigation, and sentiment — then delivers a prioritized fix list, heatmaps, session recordings
+Optilens is an enterprise-grade agentic AI CRO platform that replaces a full human CRO team. It audits any
+website, identifies revenue leaks in real dollars using live GA4 data, and delivers prioritized fixes — including
+ready-to-merge GitHub PRs — in under 2 minutes. Primary goal: help businesses generate more sales, leads,
+and revenue through continuous, AI-powered conversion optimization.
