@@ -1,0 +1,40 @@
+# FastAPI
+fastapi>=0.115.0
+uvicorn[standard]>=0.34.0
+python-multipart>=0.0.20
+pydantic>=2.10.0
+pydantic-settings>=2.7.0
+
+# Celery + Redis
+celery>=5.4.0
+redis>=5.2.0
+
+# AI / Agents
+anthropic>=0.42.0
+langgraph>=0.2.50
+langchain-anthropic>=0.3.0
+langfuse>=2.50.0
+
+# Database
+supabase>=2.11.0
+
+# Crawler
+playwright>=1.49.0
+
+# PDF + Images + Excel
+weasyprint>=63.0
+Pillow>=11.0.0
+openpyxl>=3.1.0
+
+# Security
+cryptography>=44.0.0
+
+# Monitoring
+sentry-sdk[fastapi]>=2.19.0
+
+# HTTP
+httpx>=0.28.0
+sse-starlette>=2.2.0
+
+# Utilities
+python-dotenv>=1.0.0
