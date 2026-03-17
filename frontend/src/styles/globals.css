@@ -1,0 +1,70 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Optilens Brand Colors (HSL format for Tailwind) */
+    --primary: 0 0% 11%;           /* #1C1C1C Obsidian Black */
+    --primary-foreground: 0 0% 100%; /* White */
+
+    --background: 0 0% 96.5%;      /* #F6F6F6 Off-White */
+    --foreground: 0 0% 11%;        /* #1C1C1C */
+
+    --accent: 20 100% 50%;         /* #FF5401 Burnt Orange */
+    --accent-foreground: 0 0% 100%; /* White */
+
+    --success: 162 71% 48%;        /* #22D3A0 Conversion Green */
+    --critical: 350 100% 65%;      /* #FF4D6A Red */
+    --info: 219 100% 65%;          /* #4F8EFF Blue */
+
+    --surface: 0 0% 100%;          /* #FFFFFF White */
+    --border: 0 0% 88%;            /* #E0E0E0 Light grey */
+    --text2: 0 0% 29%;             /* #4A4A4A Dark grey */
+    --text3: 0 0% 53%;             /* #888888 Light grey */
+
+    /* shadcn/ui semantic tokens */
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 11%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 11%;
+
+    --muted: 0 0% 96.5%;
+    --muted-foreground: 0 0% 29%;
+
+    --destructive: 350 100% 65%;
+    --destructive-foreground: 0 0% 100%;
+
+    --input: 0 0% 88%;
+    --ring: 20 100% 50%;
+
+    --radius: 8px;
+
+    /* CRO Score color bands */
+    --score-optimized: 162 71% 48%;   /* 80-100: #22D3A0 green */
+    --score-needs-work: 37 91% 55%;   /* 60-79: #F59E0B amber */
+    --score-high-risk: 20 100% 50%;   /* 40-59: #FF5401 orange */
+    --score-critical: 350 100% 65%;   /* 0-39: #FF4D6A red */
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground font-body;
+    font-feature-settings: "rlig" 1, "calt" 1;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-heading;
+  }
+  code, pre, kbd {
+    @apply font-mono;
+  }
+}
