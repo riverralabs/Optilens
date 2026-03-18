@@ -50,8 +50,9 @@ async def health_check() -> dict[str, str]:
 
 
 # Import and include routers
-from app.routers import audits, issues, reports, integrations, workspace, track, github  # noqa: E402
+from app.routers import auth, audits, issues, reports, integrations, workspace, track, github  # noqa: E402
 
+app.include_router(auth.router, prefix="/auth", tags=["auth"])
 app.include_router(audits.router, prefix="/audits", tags=["audits"])
 app.include_router(issues.router, prefix="/issues", tags=["issues"])
 app.include_router(reports.router, tags=["reports"])

@@ -9,6 +9,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sse_starlette.sse import EventSourceResponse
 
+from app.auth import AuthUser, get_current_user
 from app.config import Settings, get_settings
 from app.db.supabase import get_supabase_client
 from app.models.audit import AuditCreate, AuditResponse, AuditStatusEvent
@@ -28,27 +29,13 @@ async def create_audit(
         logger.warning("Audit queue is disabled via KILL_AUDIT_QUEUE")
         raise HTTPException(status_code=503, detail="Audit queue is temporarily disabled")
 
+    user = await get_current_user(request)
     supabase = get_supabase_client()
-
-    # Get user from auth header
-    auth_header = request.headers.get("Authorization", "")
-    if not auth_header.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing or invalid authorization")
-
-    token = auth_header.replace("Bearer ", "")
-    user_response = supabase.auth.get_user(token)
-    user_id = user_response.user.id
-
-    # Resolve org_id from users table
-    user_row = supabase.table("users").select("org_id").eq("id", user_id).single().execute()
-    if not user_row.data:
-        raise HTTPException(status_code=403, detail="User not found")
-    org_id = user_row.data["org_id"]
 
     # Insert audit record
     audit_data = {
-        "org_id": org_id,
-        "created_by": user_id,
+        "org_id": user.org_id,
+        "created_by": user.id,
         "url": str(payload.url),
         "status": "queued",
     }
@@ -62,31 +49,20 @@ async def create_audit(
     from app.tasks.audit_tasks import run_audit
     run_audit.delay(audit["id"])
 
-    logger.info("Audit queued: id=%s url=%s org=%s", audit["id"], payload.url, org_id)
+    logger.info("Audit queued: id=%s url=%s org=%s", audit["id"], payload.url, user.org_id)
     return AuditResponse(**audit)
 
 
 @router.get("", response_model=list[AuditResponse])
 async def list_audits(request: Request) -> list[AuditResponse]:
     """List all audits for the authenticated user's organization."""
+    user = await get_current_user(request)
     supabase = get_supabase_client()
-    auth_header = request.headers.get("Authorization", "")
-    if not auth_header.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing or invalid authorization")
-
-    token = auth_header.replace("Bearer ", "")
-    user_response = supabase.auth.get_user(token)
-    user_id = user_response.user.id
-
-    user_row = supabase.table("users").select("org_id").eq("id", user_id).single().execute()
-    if not user_row.data:
-        raise HTTPException(status_code=403, detail="User not found")
-    org_id = user_row.data["org_id"]
 
     result = (
         supabase.table("audits")
         .select("*")
-        .eq("org_id", org_id)
+        .eq("org_id", user.org_id)
         .order("created_at", desc=True)
         .execute()
     )
@@ -96,25 +72,14 @@ async def list_audits(request: Request) -> list[AuditResponse]:
 @router.get("/{audit_id}", response_model=AuditResponse)
 async def get_audit(audit_id: UUID, request: Request) -> AuditResponse:
     """Get a single audit with all agent outputs."""
+    user = await get_current_user(request)
     supabase = get_supabase_client()
-    auth_header = request.headers.get("Authorization", "")
-    if not auth_header.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing or invalid authorization")
-
-    token = auth_header.replace("Bearer ", "")
-    user_response = supabase.auth.get_user(token)
-    user_id = user_response.user.id
-
-    user_row = supabase.table("users").select("org_id").eq("id", user_id).single().execute()
-    if not user_row.data:
-        raise HTTPException(status_code=403, detail="User not found")
-    org_id = user_row.data["org_id"]
 
     result = (
         supabase.table("audits")
         .select("*")
         .eq("id", str(audit_id))
-        .eq("org_id", org_id)
+        .eq("org_id", user.org_id)
         .single()
         .execute()
     )
@@ -125,7 +90,11 @@ async def get_audit(audit_id: UUID, request: Request) -> AuditResponse:
 
 @router.get("/{audit_id}/status")
 async def audit_status_sse(audit_id: UUID, request: Request) -> EventSourceResponse:
-    """SSE endpoint for real-time audit status updates."""
+    """SSE endpoint for real-time audit status updates.
+
+    First checks Redis for cached progress state, then falls back to
+    polling the database every 2 seconds.
+    """
     import asyncio
     import json
 
@@ -140,62 +109,123 @@ async def audit_status_sse(audit_id: UUID, request: Request) -> EventSourceRespo
             if await request.is_disconnected():
                 break
 
-            result = (
-                supabase.table("audits")
-                .select("status, agent_outputs, cro_score")
-                .eq("id", str(audit_id))
-                .single()
-                .execute()
-            )
+            # Try Redis state first for faster updates
+            progress_data = _get_redis_progress(str(audit_id))
 
-            if not result.data:
-                yield {"event": "error", "data": json.dumps({"message": "Audit not found"})}
-                break
+            if progress_data:
+                status = progress_data.get("status", "running")
+                progress = int(progress_data.get("progress", 0))
+                current_agent = progress_data.get("current_agent")
 
-            audit = result.data
-            status = audit["status"]
-            agent_outputs = audit.get("agent_outputs") or {}
+                if status != last_status or progress != last_progress:
+                    if status == "complete":
+                        # Fetch final score from DB
+                        audit_row = (
+                            supabase.table("audits")
+                            .select("cro_score, agent_outputs")
+                            .eq("id", str(audit_id))
+                            .single()
+                            .execute()
+                        )
+                        outputs = audit_row.data.get("agent_outputs", {}) if audit_row.data else {}
+                        yield {
+                            "event": "audit_complete",
+                            "data": json.dumps({
+                                "cro_score": audit_row.data.get("cro_score") if audit_row.data else None,
+                                "issues_found": len(outputs.get("issues", [])),
+                                "report_ready": True,
+                            }),
+                        }
+                        break
+                    elif status == "failed":
+                        yield {
+                            "event": "audit_failed",
+                            "data": json.dumps({"message": "Audit failed"}),
+                        }
+                        break
+                    else:
+                        yield {
+                            "event": "agent_progress",
+                            "data": json.dumps({
+                                "agent": current_agent,
+                                "progress": progress,
+                                "completed_agents": [],
+                            }),
+                        }
 
-            # Calculate progress from completed agents
-            agents = ["site_intelligence", "ux_vision", "copy_content", "data_performance"]
-            completed = sum(1 for a in agents if a in agent_outputs)
-            progress = int((completed / len(agents)) * 100)
+                    last_status = status
+                    last_progress = progress
+            else:
+                # Fallback: poll Supabase directly
+                result = (
+                    supabase.table("audits")
+                    .select("status, agent_outputs, cro_score")
+                    .eq("id", str(audit_id))
+                    .single()
+                    .execute()
+                )
 
-            if status != last_status or progress != last_progress:
-                if status == "complete":
-                    yield {
-                        "event": "audit_complete",
-                        "data": json.dumps({
-                            "cro_score": audit.get("cro_score"),
-                            "issues_found": len(agent_outputs.get("issues", [])),
-                            "report_ready": True,
-                        }),
-                    }
+                if not result.data:
+                    yield {"event": "error", "data": json.dumps({"message": "Audit not found"})}
                     break
-                elif status == "failed":
-                    yield {
-                        "event": "audit_failed",
-                        "data": json.dumps({"message": "Audit failed"}),
-                    }
-                    break
-                else:
-                    # Find currently running agent
-                    current_agent = agents[completed] if completed < len(agents) else None
-                    yield {
-                        "event": "agent_progress",
-                        "data": json.dumps({
-                            "agent": current_agent,
-                            "progress": progress,
-                            "completed_agents": [a for a in agents if a in agent_outputs],
-                        }),
-                    }
 
-                last_status = status
-                last_progress = progress
+                audit = result.data
+                status = audit["status"]
+                agent_outputs = audit.get("agent_outputs") or {}
+
+                # Calculate progress from completed agents
+                agents = ["site_intelligence", "ux_vision", "copy_content", "data_performance"]
+                completed = sum(1 for a in agents if a in agent_outputs)
+                progress = int((completed / len(agents)) * 100)
+
+                if status != last_status or progress != last_progress:
+                    if status == "complete":
+                        yield {
+                            "event": "audit_complete",
+                            "data": json.dumps({
+                                "cro_score": audit.get("cro_score"),
+                                "issues_found": len(agent_outputs.get("issues", [])),
+                                "report_ready": True,
+                            }),
+                        }
+                        break
+                    elif status == "failed":
+                        yield {
+                            "event": "audit_failed",
+                            "data": json.dumps({"message": "Audit failed"}),
+                        }
+                        break
+                    else:
+                        current_agent = agents[completed] if completed < len(agents) else None
+                        yield {
+                            "event": "agent_progress",
+                            "data": json.dumps({
+                                "agent": current_agent,
+                                "progress": progress,
+                                "completed_agents": [a for a in agents if a in agent_outputs],
+                            }),
+                        }
+
+                    last_status = status
+                    last_progress = progress
 
             await asyncio.sleep(2)
 
     return EventSourceResponse(event_generator())
+
+
+def _get_redis_progress(audit_id: str) -> dict | None:
+    """Read cached audit progress from Redis. Returns None if unavailable."""
+    try:
+        import redis
+        from app.config import get_settings
+
+        settings = get_settings()
+        r = redis.from_url(settings.REDIS_URL, decode_responses=True)
+        state = r.hgetall(f"audit:{audit_id}:state")
+        return state if state else None
+    except Exception:
+        return None
 
 
 @router.post("/{audit_id}/rerun", response_model=AuditResponse)
@@ -204,30 +234,19 @@ async def rerun_audit(
     request: Request,
     settings: Settings = Depends(get_settings),
 ) -> AuditResponse:
-    """Re-queue an existing audit."""
+    """Re-queue an existing audit. Creates a new audit record with previous score."""
     if settings.KILL_AUDIT_QUEUE:
         raise HTTPException(status_code=503, detail="Audit queue is temporarily disabled")
 
+    user = await get_current_user(request)
     supabase = get_supabase_client()
-    auth_header = request.headers.get("Authorization", "")
-    if not auth_header.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing or invalid authorization")
-
-    token = auth_header.replace("Bearer ", "")
-    user_response = supabase.auth.get_user(token)
-    user_id = user_response.user.id
-
-    user_row = supabase.table("users").select("org_id").eq("id", user_id).single().execute()
-    if not user_row.data:
-        raise HTTPException(status_code=403, detail="User not found")
-    org_id = user_row.data["org_id"]
 
     # Verify audit belongs to this org
     existing = (
         supabase.table("audits")
         .select("*")
         .eq("id", str(audit_id))
-        .eq("org_id", org_id)
+        .eq("org_id", user.org_id)
         .single()
         .execute()
     )
@@ -263,26 +282,15 @@ async def rerun_audit(
 @router.delete("/{audit_id}", status_code=204)
 async def delete_audit(audit_id: UUID, request: Request) -> None:
     """Delete an audit and all associated assets."""
+    user = await get_current_user(request)
     supabase = get_supabase_client()
-    auth_header = request.headers.get("Authorization", "")
-    if not auth_header.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing or invalid authorization")
-
-    token = auth_header.replace("Bearer ", "")
-    user_response = supabase.auth.get_user(token)
-    user_id = user_response.user.id
-
-    user_row = supabase.table("users").select("org_id").eq("id", user_id).single().execute()
-    if not user_row.data:
-        raise HTTPException(status_code=403, detail="User not found")
-    org_id = user_row.data["org_id"]
 
     # Verify audit belongs to this org
     existing = (
         supabase.table("audits")
         .select("id")
         .eq("id", str(audit_id))
-        .eq("org_id", org_id)
+        .eq("org_id", user.org_id)
         .single()
         .execute()
     )

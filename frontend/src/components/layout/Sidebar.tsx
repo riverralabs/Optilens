@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { cn } from '@/lib/utils'
 import {
@@ -8,6 +9,8 @@ import {
   TrendingUp,
   Settings,
   LogOut,
+  Menu,
+  X,
 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/store/auth'
@@ -24,19 +27,25 @@ const navigation = [
 export default function Sidebar() {
   const location = useLocation()
   const user = useAuthStore((s) => s.user)
+  const [mobileOpen, setMobileOpen] = useState(false)
 
   async function handleLogout() {
     await supabase.auth.signOut()
   }
 
-  return (
-    <aside className="flex flex-col w-64 min-h-screen bg-primary text-primary-foreground">
+  const sidebarContent = (
+    <>
       {/* Logo */}
-      <div className="flex items-center gap-2 px-6 py-5 border-b border-white/10">
-        <div className="w-8 h-8 rounded-md bg-accent flex items-center justify-center">
-          <span className="text-white font-heading font-bold text-sm">O</span>
-        </div>
-        <span className="font-heading font-bold text-lg">Optilens</span>
+      <div className="flex items-center justify-between px-6 py-5 border-b border-border">
+        <span className="font-heading font-bold text-lg text-foreground">Optilens</span>
+        {/* Close button — mobile only */}
+        <button
+          onClick={() => setMobileOpen(false)}
+          className="lg:hidden text-text3 hover:text-foreground transition-colors"
+          aria-label="Close menu"
+        >
+          <X className="w-5 h-5" />
+        </button>
       </div>
 
       {/* Navigation */}
@@ -47,14 +56,15 @@ export default function Sidebar() {
             <Link
               key={item.name}
               to={item.href}
+              onClick={() => setMobileOpen(false)}
               className={cn(
-                'flex items-center gap-3 px-3 py-2.5 rounded-button text-sm transition-colors',
+                'flex items-center gap-3 px-3 py-2.5 rounded-button text-sm font-medium transition-colors',
                 isActive
-                  ? 'bg-white/10 text-white'
-                  : 'text-white/60 hover:text-white hover:bg-white/5',
+                  ? 'bg-accent/10 text-accent'
+                  : 'text-text2 hover:text-foreground hover:bg-muted',
               )}
             >
-              <item.icon className="w-5 h-5" />
+              <item.icon className={cn('w-5 h-5', isActive ? 'text-accent' : 'text-text3')} />
               {item.name}
             </Link>
           )
@@ -62,25 +72,61 @@ export default function Sidebar() {
       </nav>
 
       {/* User section */}
-      <div className="border-t border-white/10 px-3 py-4">
+      <div className="border-t border-border px-3 py-4">
         <div className="flex items-center gap-3 px-3 py-2">
-          <div className="w-8 h-8 rounded-full bg-accent/20 flex items-center justify-center">
+          <div className="w-8 h-8 rounded-full bg-accent/10 flex items-center justify-center">
             <span className="text-accent text-xs font-semibold">
               {user?.email?.charAt(0).toUpperCase() ?? 'U'}
             </span>
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-sm text-white truncate">{user?.email ?? 'User'}</p>
+            <p className="text-sm text-foreground truncate">{user?.email ?? 'User'}</p>
           </div>
           <button
             onClick={handleLogout}
-            className="text-white/40 hover:text-white transition-colors"
+            className="text-text3 hover:text-foreground transition-colors"
             aria-label="Log out"
           >
             <LogOut className="w-4 h-4" />
           </button>
         </div>
       </div>
-    </aside>
+    </>
+  )
+
+  return (
+    <>
+      {/* Mobile hamburger button */}
+      <button
+        onClick={() => setMobileOpen(true)}
+        className="fixed top-4 left-4 z-40 lg:hidden bg-surface border border-border rounded-button p-2 shadow-card"
+        aria-label="Open menu"
+      >
+        <Menu className="w-5 h-5 text-foreground" />
+      </button>
+
+      {/* Mobile overlay */}
+      {mobileOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-black/30 lg:hidden"
+          onClick={() => setMobileOpen(false)}
+        />
+      )}
+
+      {/* Mobile drawer */}
+      <aside
+        className={cn(
+          'fixed inset-y-0 left-0 z-50 flex flex-col w-64 bg-surface border-r border-border transition-transform duration-200 lg:hidden',
+          mobileOpen ? 'translate-x-0' : '-translate-x-full',
+        )}
+      >
+        {sidebarContent}
+      </aside>
+
+      {/* Desktop sidebar */}
+      <aside className="hidden lg:flex flex-col w-64 min-h-screen bg-surface border-r border-border">
+        {sidebarContent}
+      </aside>
+    </>
   )
 }
