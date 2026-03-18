@@ -47,11 +47,26 @@ export default function App() {
       return
     }
 
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session)
-      setUser(session?.user ?? null)
-      setLoading(false)
-    })
+    // If we landed with an OAuth hash fragment (access_token in URL hash),
+    // clean up the URL after Supabase processes it
+    const hash = window.location.hash
+    if (hash && hash.includes('access_token')) {
+      // Supabase JS auto-detects the hash and establishes the session.
+      // Clean the URL so the token isn't exposed in the address bar.
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        setSession(session)
+        setUser(session?.user ?? null)
+        setLoading(false)
+        // Remove the hash fragment from the URL
+        window.history.replaceState(null, '', window.location.pathname)
+      })
+    } else {
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        setSession(session)
+        setUser(session?.user ?? null)
+        setLoading(false)
+      })
+    }
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (_event, session) => {
