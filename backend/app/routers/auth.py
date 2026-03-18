@@ -49,11 +49,10 @@ async def get_current_user_profile(request: Request) -> dict:
         supabase.table("users")
         .select("org_id, role, email")
         .eq("id", user_id)
-        .maybe_single()
         .execute()
     )
 
-    if not user_row.data:
+    if not user_row.data or len(user_row.data) == 0:
         return {
             "id": user_id,
             "email": email,
@@ -62,20 +61,22 @@ async def get_current_user_profile(request: Request) -> dict:
             "role": None,
         }
 
+    row = user_row.data[0]
+
     # Get org details
     org = (
         supabase.table("organizations")
         .select("id, name, plan")
-        .eq("id", user_row.data["org_id"])
+        .eq("id", row["org_id"])
         .single()
         .execute()
     )
 
     return {
         "id": user_id,
-        "email": user_row.data["email"],
+        "email": row["email"],
         "onboarding_complete": True,
-        "org_id": user_row.data["org_id"],
-        "role": user_row.data["role"],
+        "org_id": row["org_id"],
+        "role": row["role"],
         "organization": org.data,
     }
