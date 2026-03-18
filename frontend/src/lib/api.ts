@@ -2,6 +2,10 @@ import { supabase } from './supabase'
 
 const API_URL = import.meta.env.VITE_API_URL as string || 'http://localhost:8000'
 
+if (import.meta.env.DEV) {
+  console.log('[Optilens] API_URL =', API_URL)
+}
+
 /**
  * Make an authenticated API request to the FastAPI backend.
  * Automatically attaches the Supabase session token.
@@ -26,8 +30,9 @@ async function apiRequest<T>(
         ...options.headers,
       },
     })
-  } catch {
-    throw new Error('Unable to reach the API server. Please try again later.')
+  } catch (err) {
+    console.error('[Optilens] API request failed:', `${API_URL}${path}`, err)
+    throw new Error(`Unable to reach the API server at ${API_URL}. Please try again later.`)
   }
 
   if (!response.ok) {
