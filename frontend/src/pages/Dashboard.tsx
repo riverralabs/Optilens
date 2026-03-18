@@ -26,7 +26,6 @@ export default function Dashboard() {
     queryFn: () => api.audits.list(),
   })
 
-  const latestAudit = audits?.[0]
   const recentAudits = audits?.slice(0, 6) ?? []
 
   // Get top 3 critical issues from the latest complete audit

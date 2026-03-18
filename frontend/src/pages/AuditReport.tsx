@@ -8,7 +8,7 @@ import CroScoreGauge, { getScoreBand } from '@/components/audit/CroScoreGauge'
 import { useAuditStatus } from '@/hooks/useAuditStatus'
 import { api } from '@/lib/api'
 import type { AuditData, IssueData } from '@/lib/api'
-import { Download, RefreshCw, ArrowLeft, CheckCircle, XCircle, Clock, AlertTriangle } from 'lucide-react'
+import { Download, RefreshCw, ArrowLeft, CheckCircle, XCircle, Clock } from 'lucide-react'
 
 const AGENT_LABELS: Record<string, string> = {
   site_intelligence: 'Site Intelligence',
