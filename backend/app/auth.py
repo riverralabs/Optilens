@@ -55,7 +55,7 @@ async def get_current_user(request: Request) -> AuthUser:
         supabase.table("users")
         .select("org_id, role, email")
         .eq("id", user_id)
-        .maybeSingle()
+        .maybe_single()
         .execute()
     )
 
