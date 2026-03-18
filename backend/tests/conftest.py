@@ -92,6 +92,10 @@ class FakeQueryBuilder:
         self._single = True
         return self
 
+    def maybe_single(self) -> FakeQueryBuilder:
+        self._single = True
+        return self
+
     def execute(self) -> Any:
         @dataclass
         class Result:

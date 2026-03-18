@@ -55,19 +55,19 @@ async def get_current_user(request: Request) -> AuthUser:
         supabase.table("users")
         .select("org_id, role, email")
         .eq("id", user_id)
-        .maybe_single()
         .execute()
     )
 
-    if not user_row.data:
+    if not user_row.data or len(user_row.data) == 0:
         raise HTTPException(
             status_code=403,
             detail="User account not fully set up. Please complete onboarding.",
         )
 
+    row = user_row.data[0]
     return AuthUser(
         id=user_id,
-        org_id=user_row.data["org_id"],
-        role=user_row.data["role"],
-        email=user_row.data["email"],
+        org_id=row["org_id"],
+        role=row["role"],
+        email=row["email"],
     )
