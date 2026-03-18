@@ -59,6 +59,15 @@ class Settings(BaseSettings):
     APP_ENV: str = "development"
     CORS_ORIGINS: str = "http://localhost:5173"
 
+    @field_validator("CORS_ORIGINS")
+    @classmethod
+    def validate_cors_origins(cls, v: str) -> str:
+        """Strip accidental 'CORS_ORIGINS=' prefix and validate origins."""
+        # Common mistake: pasting KEY=VALUE into a platform's value field
+        if v.startswith("CORS_ORIGINS="):
+            v = v[len("CORS_ORIGINS="):]
+        return v
+
     model_config = {
         "env_file": ".env",
         "env_file_encoding": "utf-8",
