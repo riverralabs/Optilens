@@ -43,6 +43,12 @@ app.add_middleware(
 )
 
 
+@app.get("/")
+async def root() -> dict[str, str]:
+    """Root endpoint."""
+    return {"service": "optilens-api", "version": "0.1.0", "docs": "/docs"}
+
+
 @app.get("/health")
 async def health_check() -> dict[str, str]:
     """Health check endpoint for Railway / uptime monitors."""
