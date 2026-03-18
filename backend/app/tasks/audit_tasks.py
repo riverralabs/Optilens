@@ -2,17 +2,65 @@
 
 run_audit is the main task that orchestrates the full audit pipeline.
 Each agent is called as a subtask with state persisted to Supabase
-after each agent completes.
+after each agent completes. Progress is published to Redis for SSE.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 
 from celery import shared_task
 
 logger = logging.getLogger("optilens.tasks")
+
+# Agent stages in pipeline order — used for progress calculation
+AGENT_STAGES = [
+    "site_intelligence",
+    "ux_vision",
+    "copy_content",
+    "data_performance",
+    "synthesis",
+]
+
+
+def _publish_progress(audit_id: str, agent: str, status: str, progress: int) -> None:
+    """Publish audit progress to Redis for SSE consumers.
+
+    Writes both a pub/sub message (for real-time listeners) and a
+    hash key (for late-joining clients).
+    """
+    try:
+        import redis
+        from app.config import get_settings
+
+        settings = get_settings()
+        r = redis.from_url(settings.REDIS_URL, decode_responses=True)
+
+        payload = json.dumps({
+            "audit_id": audit_id,
+            "agent": agent,
+            "status": status,
+            "progress": progress,
+            "completed_agents": [],
+            "timestamp": time.time(),
+        })
+
+        # Pub/sub for real-time SSE listeners
+        r.publish(f"audit:{audit_id}:progress", payload)
+
+        # Hash for late-joining clients — expires in 1 hour
+        r.hset(f"audit:{audit_id}:state", mapping={
+            "current_agent": agent,
+            "status": status,
+            "progress": str(progress),
+            "updated_at": str(time.time()),
+        })
+        r.expire(f"audit:{audit_id}:state", 3600)
+    except Exception as exc:
+        # Progress publishing is best-effort — don't crash the audit
+        logger.warning("Failed to publish progress for audit %s: %s", audit_id, exc)
 
 
 @shared_task(
@@ -26,9 +74,9 @@ logger = logging.getLogger("optilens.tasks")
 def run_audit(self, audit_id: str) -> dict:  # type: ignore[no-untyped-def]
     """Main audit task — runs the full LangGraph agent pipeline.
 
-    State machine: queued → running → complete | failed | partial
+    State machine: queued -> running -> complete | failed | partial
     Retry policy: 3 attempts with 10s backoff
-    Timeout: 120 seconds total
+    Timeout: 120 seconds total, 45 seconds per agent
     """
     from app.db.supabase import get_supabase_client
 
@@ -38,6 +86,7 @@ def run_audit(self, audit_id: str) -> dict:  # type: ignore[no-untyped-def]
     try:
         # Mark audit as running
         supabase.table("audits").update({"status": "running"}).eq("id", audit_id).execute()
+        _publish_progress(audit_id, "initializing", "running", 0)
         logger.info("Audit started: id=%s", audit_id)
 
         # Fetch audit details
@@ -54,12 +103,13 @@ def run_audit(self, audit_id: str) -> dict:  # type: ignore[no-untyped-def]
             audit_id=audit_id,
             org_id=audit["org_id"],
             url=audit["url"],
+            progress_callback=_publish_progress,
         )
 
         # Calculate duration
         duration = int(time.time() - start_time)
 
-        # Update audit with final results
+        # Persist final results to Supabase
         supabase.table("audits").update({
             "status": "complete",
             "cro_score": final_state.get("cro_score"),
@@ -72,7 +122,11 @@ def run_audit(self, audit_id: str) -> dict:  # type: ignore[no-untyped-def]
             "completed_at": "now()",
         }).eq("id", audit_id).execute()
 
-        logger.info("Audit completed: id=%s duration=%ds score=%s", audit_id, duration, final_state.get("cro_score"))
+        _publish_progress(audit_id, "complete", "complete", 100)
+        logger.info(
+            "Audit completed: id=%s duration=%ds score=%s",
+            audit_id, duration, final_state.get("cro_score"),
+        )
         return {"status": "complete", "audit_id": audit_id, "duration": duration}
 
     except Exception as exc:
@@ -85,6 +139,8 @@ def run_audit(self, audit_id: str) -> dict:  # type: ignore[no-untyped-def]
             "agent_outputs": {"error": str(exc)},
             "audit_duration_seconds": duration,
         }).eq("id", audit_id).execute()
+
+        _publish_progress(audit_id, "failed", "failed", 0)
 
         # Retry if attempts remain
         if self.request.retries < self.max_retries:
@@ -120,7 +176,7 @@ def generate_report_task(self, audit_id: str) -> dict:  # type: ignore[no-untype
 
         pdf_path = generate_audit_pdf(audit)
 
-        # Update report record
+        # Upsert report record
         org_id = audit["org_id"]
         supabase.table("reports").upsert({
             "audit_id": audit_id,
