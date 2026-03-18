@@ -51,37 +51,23 @@ export default function Onboarding() {
     setError(null)
 
     try {
-      // 1. Create organization
-      const { data: org, error: orgError } = await supabase
-        .from('organizations')
-        .insert({ name: workspaceName.trim() })
-        .select('id')
-        .single()
-
-      if (orgError) {
-        throw new Error(orgError.message)
-      }
-
-      // 2. Create user record linked to org with 'owner' role
-      const { error: userError } = await supabase
-        .from('users')
-        .insert({
-          id: user.id,
-          org_id: org.id,
-          role: 'owner',
-          email: user.email ?? '',
+      // 1. Create org + user atomically via SECURITY DEFINER function
+      const { data: orgId, error: onboardError } = await supabase
+        .rpc('onboard_user', {
+          p_workspace_name: workspaceName.trim(),
+          p_email: user.email ?? '',
         })
 
-      if (userError) {
-        throw new Error(userError.message)
+      if (onboardError) {
+        throw new Error(onboardError.message)
       }
 
-      // 3. If URL provided, create the first audit and redirect to progress
+      // 2. If URL provided, create the first audit and redirect to progress
       if (auditUrl.trim()) {
         const { data: audit, error: auditError } = await supabase
           .from('audits')
           .insert({
-            org_id: org.id,
+            org_id: orgId,
             created_by: user.id,
             url: auditUrl.trim(),
             site_type: siteType,
