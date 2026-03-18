@@ -9,7 +9,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sse_starlette.sse import EventSourceResponse
 
-from app.auth import AuthUser, get_current_user
+from app.auth import get_current_user
 from app.config import Settings, get_settings
 from app.db.supabase import get_supabase_client
 from app.models.audit import AuditCreate, AuditResponse
