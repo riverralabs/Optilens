@@ -161,37 +161,68 @@ ALTER TABLE events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE session_recordings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE audit_embeddings ENABLE ROW LEVEL SECURITY;
 
--- RLS policies — users can only access data in their organization
+-- Helper function to get the current user's org_id without triggering RLS.
+-- SECURITY DEFINER runs as the function owner (bypasses RLS on users table),
+-- which prevents infinite recursion when policies on any table need org_id.
+CREATE OR REPLACE FUNCTION public.get_my_org_id()
+RETURNS UUID
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT org_id FROM public.users WHERE id = auth.uid()
+$$;
 
-CREATE POLICY "org_isolation_organizations" ON organizations
-  USING (id IN (SELECT org_id FROM users WHERE id = auth.uid()));
+-- ── Users table policies ──
+-- Users can read their own row + rows in the same org.
+-- No subquery on users here — just auth.uid() or the helper function.
+CREATE POLICY "users_select" ON users
+  FOR SELECT USING (id = auth.uid() OR org_id = public.get_my_org_id());
 
-CREATE POLICY "org_isolation_users" ON users
-  USING (org_id IN (SELECT org_id FROM users WHERE id = auth.uid()));
+CREATE POLICY "users_insert" ON users
+  FOR INSERT WITH CHECK (id = auth.uid());
 
+CREATE POLICY "users_update" ON users
+  FOR UPDATE USING (id = auth.uid());
+
+-- ── Organizations table policies ──
+CREATE POLICY "orgs_insert" ON organizations
+  FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
+
+CREATE POLICY "orgs_select" ON organizations
+  FOR SELECT USING (id = public.get_my_org_id());
+
+CREATE POLICY "orgs_update" ON organizations
+  FOR UPDATE USING (id = public.get_my_org_id());
+
+-- ── All other tables — org isolation via helper function ──
 CREATE POLICY "org_isolation_audits" ON audits
-  USING (org_id IN (SELECT org_id FROM users WHERE id = auth.uid()));
+  USING (org_id = public.get_my_org_id());
+
+CREATE POLICY "audits_insert" ON audits
+  FOR INSERT WITH CHECK (org_id = public.get_my_org_id());
 
 CREATE POLICY "org_isolation_issues" ON issues
-  USING (org_id IN (SELECT org_id FROM users WHERE id = auth.uid()));
+  USING (org_id = public.get_my_org_id());
 
 CREATE POLICY "org_isolation_reports" ON reports
-  USING (org_id IN (SELECT org_id FROM users WHERE id = auth.uid()));
+  USING (org_id = public.get_my_org_id());
 
 CREATE POLICY "org_isolation_integrations" ON integrations
-  USING (org_id IN (SELECT org_id FROM users WHERE id = auth.uid()));
+  USING (org_id = public.get_my_org_id());
 
 CREATE POLICY "org_isolation_pull_requests" ON pull_requests
-  USING (org_id IN (SELECT org_id FROM users WHERE id = auth.uid()));
+  USING (org_id = public.get_my_org_id());
 
 CREATE POLICY "org_isolation_events" ON events
-  USING (org_id IN (SELECT org_id FROM users WHERE id = auth.uid()));
+  USING (org_id = public.get_my_org_id());
 
 CREATE POLICY "org_isolation_session_recordings" ON session_recordings
-  USING (org_id IN (SELECT org_id FROM users WHERE id = auth.uid()));
+  USING (org_id = public.get_my_org_id());
 
 CREATE POLICY "org_isolation_audit_embeddings" ON audit_embeddings
-  USING (org_id IN (SELECT org_id FROM users WHERE id = auth.uid()));
+  USING (org_id = public.get_my_org_id());
 
 -- ═══════════════════════════════════════════
 -- Indexes for performance
