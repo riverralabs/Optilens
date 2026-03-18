@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import * as Sentry from '@sentry/react'
 import { supabase, isSupabaseConfigured } from '@/lib/supabase'
 import { useAuthStore } from '@/store/auth'
+import ProtectedRoute from '@/components/layout/ProtectedRoute'
 import DashboardLayout from '@/components/layout/DashboardLayout'
 import Dashboard from '@/pages/Dashboard'
 import AuditReport from '@/pages/AuditReport'
@@ -11,6 +12,10 @@ import AuditsLibrary from '@/pages/AuditsLibrary'
 import Connections from '@/pages/Connections'
 import Progress from '@/pages/Progress'
 import Settings from '@/pages/Settings'
+import Login from '@/pages/Login'
+import Signup from '@/pages/Signup'
+import AuthCallback from '@/pages/AuthCallback'
+import Onboarding from '@/pages/Onboarding'
 
 // Initialize Sentry only if DSN is configured
 const sentryDsn = import.meta.env.VITE_SENTRY_DSN as string | undefined
@@ -38,7 +43,6 @@ export default function App() {
 
   useEffect(() => {
     if (!isSupabaseConfigured) {
-      // Skip auth in dev when Supabase isn't connected yet
       setLoading(false)
       return
     }
@@ -64,14 +68,29 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
         <Routes>
-          {/* Public routes — auth pages built in Step 1.3 */}
-          <Route path="/login" element={<div>Login page — Step 1.3</div>} />
-          <Route path="/signup" element={<div>Signup page — Step 1.3</div>} />
+          {/* Public routes */}
+          <Route path="/login" element={<Login />} />
+          <Route path="/signup" element={<Signup />} />
+          <Route path="/auth/callback" element={<AuthCallback />} />
 
-          {/* Dashboard routes — skip auth guard in dev when Supabase not configured */}
+          {/* Onboarding — requires auth but not org setup */}
+          <Route
+            path="/onboarding"
+            element={
+              <ProtectedRoute>
+                <Onboarding />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Dashboard routes — protected */}
           <Route
             path="/dashboard"
-            element={<DashboardLayout />}
+            element={
+              <ProtectedRoute>
+                <DashboardLayout />
+              </ProtectedRoute>
+            }
           >
             <Route index element={<Dashboard />} />
             <Route path="audits" element={<AuditsLibrary />} />
