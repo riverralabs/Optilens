@@ -9,10 +9,14 @@ Builds a LangGraph StateGraph that runs the audit pipeline:
 from __future__ import annotations
 
 import logging
+import signal
 import time
 from typing import Annotated, Callable, TypedDict
 
 from langgraph.graph import END, StateGraph
+
+# Per-agent timeout in seconds — prevents one hanging agent from blocking the pipeline
+AGENT_TIMEOUT_SECONDS = 90
 
 logger = logging.getLogger("optilens.agents.orchestrator")
 
@@ -98,6 +102,34 @@ def _notify(state: AuditState, agent: str, status: str, progress: int) -> None:
             pass
 
 
+class _AgentTimeoutError(Exception):
+    """Raised when an agent exceeds its time budget."""
+
+
+def _run_with_timeout(fn, args=(), kwargs=None, timeout: int = AGENT_TIMEOUT_SECONDS):
+    """Run a function with a timeout. Returns result or raises _AgentTimeoutError."""
+    import threading
+
+    result = [None]
+    exc = [None]
+
+    def target():
+        try:
+            result[0] = fn(*args, **(kwargs or {}))
+        except Exception as e:
+            exc[0] = e
+
+    thread = threading.Thread(target=target, daemon=True)
+    thread.start()
+    thread.join(timeout)
+
+    if thread.is_alive():
+        raise _AgentTimeoutError(f"{fn.__name__} timed out after {timeout}s")
+    if exc[0]:
+        raise exc[0]
+    return result[0]
+
+
 def _persist_agent_output(state: AuditState, agent_name: str, output: dict) -> None:
     """Persist an individual agent's output to Supabase after it completes."""
     try:
@@ -133,7 +165,18 @@ def orchestrator_init(state: AuditState) -> dict:
     logger.info("Orchestrator init: crawling %s", url)
     _notify(state, "crawler", "running", 5)
 
-    crawl_result = crawl_pages(url, state.get("pages"))
+    try:
+        crawl_result = _run_with_timeout(crawl_pages, args=(url, state.get("pages")), timeout=120)
+    except (_AgentTimeoutError, Exception) as exc:
+        logger.error("Crawler failed/timed out for %s: %s", url, exc)
+        _notify(state, "crawler", "complete", 10)
+        # Return empty result so pipeline can continue with DOM-less analysis
+        return {
+            "screenshots": {},
+            "mobile_screenshots": {},
+            "dom_content": {},
+            "page_metadata": {},
+        }
 
     _notify(state, "crawler", "complete", 10)
 
@@ -151,15 +194,25 @@ def site_intelligence_node(state: AuditState) -> dict:
 
     _notify(state, "site_intelligence", "running", 15)
 
-    result = run_site_intelligence(state)
-    _persist_agent_output(state, "site_intelligence", result)
+    try:
+        result = _run_with_timeout(run_site_intelligence, args=(state,))
+    except (_AgentTimeoutError, Exception) as exc:
+        logger.error("Site intelligence failed: %s", exc)
+        result = {
+            "site_type": "landing_page",
+            "framework": ["AIDA"],
+            "primary_kpi": "conversion_rate",
+            "confidence": 0.3,
+            "reasoning": f"Fallback — agent failed: {exc}",
+        }
 
+    _persist_agent_output(state, "site_intelligence", result)
     _notify(state, "site_intelligence", "complete", 25)
 
     return {
         "site_type": result["site_type"],
         "framework": result["framework"],
-        "primary_kpi": result["primary_kpi"],
+        "primary_kpi": result.get("primary_kpi", "conversion_rate"),
         "site_intelligence_output": result,
     }
 
@@ -170,9 +223,13 @@ def ux_vision_node(state: AuditState) -> dict:
 
     _notify(state, "ux_vision", "running", 35)
 
-    result = run_ux_vision(state)
-    _persist_agent_output(state, "ux_vision", result)
+    try:
+        result = _run_with_timeout(run_ux_vision, args=(state,))
+    except (_AgentTimeoutError, Exception) as exc:
+        logger.error("UX vision agent failed: %s", exc)
+        result = {"ux_issues": [], "ux_score": 50, "mobile_score": 50, "accessibility_score": 50}
 
+    _persist_agent_output(state, "ux_vision", result)
     _notify(state, "ux_vision", "complete", 50)
 
     return {
@@ -189,9 +246,13 @@ def copy_content_node(state: AuditState) -> dict:
 
     _notify(state, "copy_content", "running", 35)
 
-    result = run_copy_content(state)
-    _persist_agent_output(state, "copy_content", result)
+    try:
+        result = _run_with_timeout(run_copy_content, args=(state,))
+    except (_AgentTimeoutError, Exception) as exc:
+        logger.error("Copy content agent failed: %s", exc)
+        result = {"copy_issues": [], "persuasion_score": 50, "readability_score": 50, "emotional_trigger_map": {}}
 
+    _persist_agent_output(state, "copy_content", result)
     _notify(state, "copy_content", "complete", 60)
 
     return {
@@ -208,9 +269,13 @@ def data_performance_node(state: AuditState) -> dict:
 
     _notify(state, "data_performance", "running", 35)
 
-    result = run_data_performance(state)
-    _persist_agent_output(state, "data_performance", result)
+    try:
+        result = _run_with_timeout(run_data_performance, args=(state,))
+    except (_AgentTimeoutError, Exception) as exc:
+        logger.error("Data performance agent failed: %s", exc)
+        result = {"performance_data": {}, "seo_issues": [], "revenue_leak_monthly": 0, "revenue_leak_confidence": "Estimated", "revenue_leak_assumptions": {}}
 
+    _persist_agent_output(state, "data_performance", result)
     _notify(state, "data_performance", "complete", 70)
 
     return {

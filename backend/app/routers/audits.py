@@ -117,6 +117,13 @@ async def audit_status_sse(audit_id: UUID, request: Request) -> EventSourceRespo
                 progress = int(progress_data.get("progress", 0))
                 current_agent = progress_data.get("current_agent")
 
+                # Parse completed_agents from Redis (stored as JSON string)
+                completed_agents_raw = progress_data.get("completed_agents", "[]")
+                try:
+                    completed_agents = json.loads(completed_agents_raw) if isinstance(completed_agents_raw, str) else completed_agents_raw
+                except (json.JSONDecodeError, TypeError):
+                    completed_agents = []
+
                 if status != last_status or progress != last_progress:
                     if status == "complete":
                         # Fetch final score from DB
@@ -149,7 +156,7 @@ async def audit_status_sse(audit_id: UUID, request: Request) -> EventSourceRespo
                             "data": json.dumps({
                                 "agent": current_agent,
                                 "progress": progress,
-                                "completed_agents": [],
+                                "completed_agents": completed_agents,
                             }),
                         }
 
@@ -159,7 +166,7 @@ async def audit_status_sse(audit_id: UUID, request: Request) -> EventSourceRespo
                 # Fallback: poll Supabase directly
                 result = (
                     supabase.table("audits")
-                    .select("status, agent_outputs, cro_score")
+                    .select("status, agent_outputs, cro_score, current_agent, progress")
                     .eq("id", str(audit_id))
                     .single()
                     .execute()
@@ -173,10 +180,20 @@ async def audit_status_sse(audit_id: UUID, request: Request) -> EventSourceRespo
                 status = audit["status"]
                 agent_outputs = audit.get("agent_outputs") or {}
 
-                # Calculate progress from completed agents
+                # Use persisted progress if available, otherwise estimate from agent_outputs
                 agents = ["site_intelligence", "ux_vision", "copy_content", "data_performance"]
-                completed = sum(1 for a in agents if a in agent_outputs)
-                progress = int((completed / len(agents)) * 100)
+                completed_list = [a for a in agents if a in agent_outputs]
+
+                db_progress = audit.get("progress")
+                if db_progress is not None and db_progress > 0:
+                    progress = int(db_progress)
+                else:
+                    completed = len(completed_list)
+                    progress = int((completed / len(agents)) * 100)
+
+                current_agent = audit.get("current_agent") or (
+                    agents[len(completed_list)] if len(completed_list) < len(agents) else None
+                )
 
                 if status != last_status or progress != last_progress:
                     if status == "complete":
@@ -196,13 +213,12 @@ async def audit_status_sse(audit_id: UUID, request: Request) -> EventSourceRespo
                         }
                         break
                     else:
-                        current_agent = agents[completed] if completed < len(agents) else None
                         yield {
                             "event": "agent_progress",
                             "data": json.dumps({
                                 "agent": current_agent,
                                 "progress": progress,
-                                "completed_agents": [a for a in agents if a in agent_outputs],
+                                "completed_agents": completed_list,
                             }),
                         }
 
