@@ -232,19 +232,48 @@ function AuditProgress({
   audit: AuditData
   sseStatus: ReturnType<typeof useAuditStatus>
 }) {
-  const progress = sseStatus.progress || (audit.status === 'queued' ? 0 : 10)
+  const progress = sseStatus.progress || (audit.status === 'queued' ? 0 : 5)
   const currentAgent = sseStatus.currentAgent
 
   const agents = ['site_intelligence', 'ux_vision', 'copy_content', 'data_performance', 'synthesis']
 
+  // Also treat agents as completed if progress has moved past them
+  const agentProgressThresholds: Record<string, number> = {
+    site_intelligence: 25,
+    ux_vision: 50,
+    copy_content: 60,
+    data_performance: 70,
+    synthesis: 95,
+  }
+
+  const isAgentCompleted = (agent: string) => {
+    if (sseStatus.completedAgents.includes(agent)) return true
+    const threshold = agentProgressThresholds[agent]
+    return threshold != null && progress >= threshold
+  }
+
   return (
     <div className="max-w-lg mx-auto py-16 space-y-8">
       <div className="text-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-2 border-accent border-t-transparent mx-auto mb-4" />
-        <h2 className="text-xl font-heading font-bold">Analyzing your site</h2>
+        {sseStatus.isStalled ? (
+          <XCircle className="w-12 h-12 text-warning mx-auto mb-4" />
+        ) : (
+          <div className="animate-spin rounded-full h-12 w-12 border-2 border-accent border-t-transparent mx-auto mb-4" />
+        )}
+        <h2 className="text-xl font-heading font-bold">
+          {sseStatus.isStalled ? 'Audit is taking longer than expected' : 'Analyzing your site'}
+        </h2>
         <p className="text-sm text-text2 mt-1">
           {audit.url.replace(/^https?:\/\//, '')}
         </p>
+        {sseStatus.isStalled && (
+          <p className="text-xs text-warning mt-2">
+            The audit may still be running. You can wait or try again later.
+          </p>
+        )}
+        {sseStatus.error && !sseStatus.isStalled && (
+          <p className="text-xs text-text3 mt-2">{sseStatus.error}</p>
+        )}
       </div>
 
       {/* Progress bar */}
@@ -264,13 +293,13 @@ function AuditProgress({
       {/* Agent status list */}
       <div className="space-y-2">
         {agents.map((agent) => {
-          const isCompleted = sseStatus.completedAgents.includes(agent)
-          const isCurrent = currentAgent === agent
+          const completed = isAgentCompleted(agent)
+          const isCurrent = currentAgent === agent && !completed
           const label = AGENT_LABELS[agent] ?? agent
 
           return (
             <div key={agent} className="flex items-center gap-3 py-2">
-              {isCompleted ? (
+              {completed ? (
                 <CheckCircle className="w-5 h-5 text-success flex-shrink-0" />
               ) : isCurrent ? (
                 <div className="animate-spin rounded-full h-5 w-5 border-2 border-accent border-t-transparent flex-shrink-0" />
@@ -279,7 +308,7 @@ function AuditProgress({
               )}
               <span
                 className={`text-sm ${
-                  isCompleted
+                  completed
                     ? 'text-text2'
                     : isCurrent
                       ? 'text-foreground font-medium'

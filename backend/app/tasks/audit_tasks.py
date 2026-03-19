@@ -25,12 +25,24 @@ AGENT_STAGES = [
 ]
 
 
+_completed_agents: dict[str, list[str]] = {}  # audit_id -> completed agents
+
+
 def _publish_progress(audit_id: str, agent: str, status: str, progress: int) -> None:
     """Publish audit progress to Redis for SSE consumers.
 
     Writes both a pub/sub message (for real-time listeners) and a
-    hash key (for late-joining clients).
+    hash key (for late-joining clients). Tracks completed agents.
     """
+    # Track completed agents per audit
+    if audit_id not in _completed_agents:
+        _completed_agents[audit_id] = []
+    if status == "complete" and agent not in ("initializing", "complete", "failed"):
+        if agent not in _completed_agents[audit_id]:
+            _completed_agents[audit_id].append(agent)
+
+    completed = _completed_agents.get(audit_id, [])
+
     try:
         import redis
         from app.config import get_settings
@@ -43,7 +55,7 @@ def _publish_progress(audit_id: str, agent: str, status: str, progress: int) -> 
             "agent": agent,
             "status": status,
             "progress": progress,
-            "completed_agents": [],
+            "completed_agents": completed,
             "timestamp": time.time(),
         })
 
@@ -55,6 +67,7 @@ def _publish_progress(audit_id: str, agent: str, status: str, progress: int) -> 
             "current_agent": agent,
             "status": status,
             "progress": str(progress),
+            "completed_agents": json.dumps(completed),
             "updated_at": str(time.time()),
         })
         r.expire(f"audit:{audit_id}:state", 3600)
@@ -62,13 +75,24 @@ def _publish_progress(audit_id: str, agent: str, status: str, progress: int) -> 
         # Progress publishing is best-effort — don't crash the audit
         logger.warning("Failed to publish progress for audit %s: %s", audit_id, exc)
 
+    # Also persist progress to Supabase so the fallback SSE path works
+    try:
+        from app.db.supabase import get_supabase_client
+        supabase = get_supabase_client()
+        supabase.table("audits").update({
+            "current_agent": agent,
+            "progress": progress,
+        }).eq("id", audit_id).execute()
+    except Exception:
+        pass  # best-effort
+
 
 @shared_task(
     bind=True,
     max_retries=3,
     default_retry_delay=10,
-    soft_time_limit=120,
-    time_limit=130,
+    soft_time_limit=600,
+    time_limit=620,
     acks_late=True,
 )
 def run_audit(self, audit_id: str) -> dict:  # type: ignore[no-untyped-def]
@@ -76,7 +100,7 @@ def run_audit(self, audit_id: str) -> dict:  # type: ignore[no-untyped-def]
 
     State machine: queued -> running -> complete | failed | partial
     Retry policy: 3 attempts with 10s backoff
-    Timeout: 120 seconds total, 45 seconds per agent
+    Timeout: 600 seconds total (crawl + multiple LLM calls)
     """
     from app.db.supabase import get_supabase_client
 
@@ -123,6 +147,7 @@ def run_audit(self, audit_id: str) -> dict:  # type: ignore[no-untyped-def]
         }).eq("id", audit_id).execute()
 
         _publish_progress(audit_id, "complete", "complete", 100)
+        _completed_agents.pop(audit_id, None)  # cleanup
         logger.info(
             "Audit completed: id=%s duration=%ds score=%s",
             audit_id, duration, final_state.get("cro_score"),
@@ -141,6 +166,7 @@ def run_audit(self, audit_id: str) -> dict:  # type: ignore[no-untyped-def]
         }).eq("id", audit_id).execute()
 
         _publish_progress(audit_id, "failed", "failed", 0)
+        _completed_agents.pop(audit_id, None)  # cleanup
 
         # Retry if attempts remain
         if self.request.retries < self.max_retries:

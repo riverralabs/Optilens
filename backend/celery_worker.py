@@ -37,9 +37,9 @@ celery_app.conf.update(
     # Retry settings
     task_acks_late=True,
     worker_prefetch_multiplier=1,
-    # Timeout settings
-    task_soft_time_limit=120,
-    task_time_limit=130,
+    # Timeout settings — generous for multi-agent pipeline with crawling + LLM calls
+    task_soft_time_limit=600,
+    task_time_limit=620,
     # Result expiry
     result_expires=3600,
     # Broker connection retry
